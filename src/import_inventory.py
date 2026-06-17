@@ -263,6 +263,22 @@ def import_file(excel_path):
 
         print(f"Upserted {len(product_ids_for_snapshots)} products")
 
+        missing_location_columns = [
+            col for col in LOCATION_QUANTITY_COLUMNS if col not in df.columns
+        ]
+        if len(missing_location_columns) > len(LOCATION_QUANTITY_COLUMNS) / 2:
+            raise ValueError(
+                "File appears to use a different location structure than expected — skipping"
+            )
+
+        if missing_location_columns:
+            for col in missing_location_columns:
+                df[col] = 0.0
+            print(
+                "Added missing location columns filled with 0.0: "
+                + ", ".join(missing_location_columns)
+            )
+
         snapshot_df = df[
             ["Product Name", "Container Size (mL)"] + LOCATION_QUANTITY_COLUMNS
         ].copy()
