@@ -11,10 +11,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from queries import (
     get_available_snapshot_dates,
     get_below_par_products,
+    get_inventory_trend,
     get_inventory_value_by_category,
     get_inventory_value_by_distributor,
     get_inventory_value_by_location,
     get_inventory_value_by_product,
+    get_product_velocity,
+    get_velocity_by_location,
 )
 
 load_dotenv()
@@ -23,6 +26,9 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 SNAPSHOT_DATE = "2025-12-19"
+START_DATE = "2024-08-25"
+END_DATE = "2025-12-19"
+TREND_PRODUCT = "Fireball Cinnamon Whisky"
 
 # Show all columns when printing DataFrames (avoid "..." truncation)
 pd.set_option("display.max_columns", None)
@@ -69,6 +75,21 @@ with engine.connect() as conn:
     run_query(
         "get_available_snapshot_dates",
         get_available_snapshot_dates(conn),
+    )
+
+    run_query(
+        "get_product_velocity",
+        get_product_velocity(conn, START_DATE, END_DATE),
+    )
+
+    run_query(
+        "get_velocity_by_location",
+        get_velocity_by_location(conn, START_DATE, END_DATE),
+    )
+
+    run_query(
+        "get_inventory_trend",
+        get_inventory_trend(conn, TREND_PRODUCT),
     )
 
 print("All queries complete.")

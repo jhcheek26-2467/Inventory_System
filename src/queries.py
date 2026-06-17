@@ -147,3 +147,174 @@ def get_available_snapshot_dates(conn):
         """
     )
     return pd.read_sql(query, conn)
+
+
+def get_inventory_trend(conn, product_name):
+    """
+    Total on-hand quantity for one product at every snapshot date.
+
+    SQL: Filter snapshots to the given product name, sum quantity across
+    all locations for each snapshot date, and return the series in
+    chronological order.
+    """
+    query = text(
+        """
+        SELECT
+            s.snapshot_date,
+            SUM(s.quantity) AS total_quantity_on_hand
+        FROM inventory_snapshots AS s
+        INNER JOIN products AS p ON p.product_id = s.product_id
+        WHERE p.product_name = :product_name
+        GROUP BY s.snapshot_date
+        ORDER BY s.snapshot_date ASC
+        """
+    )
+    return pd.read_sql(query, conn, params={"product_name": product_name})
+
+
+def get_product_velocity(conn, start_date, end_date):
+    """
+    Total quantity consumed per product between two snapshot dates.
+
+    SQL: Sum each product's quantity across all locations on the start
+    date and on the end date, subtract end from start, and keep only
+    products where inventory went down (positive consumption). Sort
+    by most consumed first.
+    """
+    query = text(
+        """
+        WITH start_quantities AS (
+            SELECT
+                product_id,
+                SUM(quantity) AS total_quantity
+            FROM inventory_snapshots
+            WHERE snapshot_date = :start_date
+            GROUP BY product_id
+        ),
+        end_quantities AS (
+            SELECT
+                product_id,
+                SUM(quantity) AS total_quantity
+            FROM inventory_snapshots
+            WHERE snapshot_date = :end_date
+            GROUP BY product_id
+        )
+        SELECT
+            p.product_id,
+            p.product_name,
+            sq.total_quantity AS start_quantity,
+            COALESCE(eq.total_quantity, 0) AS end_quantity,
+            sq.total_quantity - COALESCE(eq.total_quantity, 0) AS consumption
+        FROM start_quantities AS sq
+        INNER JOIN products AS p ON p.product_id = sq.product_id
+        LEFT JOIN end_quantities AS eq ON eq.product_id = sq.product_id
+        WHERE sq.total_quantity - COALESCE(eq.total_quantity, 0) > 0
+        ORDER BY consumption DESC
+        """
+    )
+    return pd.read_sql(
+        query, conn, params={"start_date": start_date, "end_date": end_date}
+    )
+
+
+def get_velocity_by_location(conn, start_date, end_date):
+    """
+    Quantity consumed per product and location between two snapshot dates.
+
+    SQL: Same start-minus-end logic as product velocity, but grouped by
+    product and location so you can see which bar used the most of each
+    item. Only rows with positive consumption, sorted highest first.
+    """
+    query = text(
+        """
+        WITH start_quantities AS (
+            SELECT
+                product_id,
+                location_id,
+                SUM(quantity) AS quantity
+            FROM inventory_snapshots
+            WHERE snapshot_date = :start_date
+            GROUP BY product_id, location_id
+        ),
+        end_quantities AS (
+            SELECT
+                product_id,
+                location_id,
+                SUM(quantity) AS quantity
+            FROM inventory_snapshots
+            WHERE snapshot_date = :end_date
+            GROUP BY product_id, location_id
+        )
+        SELECT
+            p.product_id,
+            p.product_name,
+            l.location_id,
+            l.location_name,
+            sq.quantity AS start_quantity,
+            COALESCE(eq.quantity, 0) AS end_quantity,
+            sq.quantity - COALESCE(eq.quantity, 0) AS consumption
+        FROM start_quantities AS sq
+        INNER JOIN products AS p ON p.product_id = sq.product_id
+        INNER JOIN locations AS l ON l.location_id = sq.location_id
+        LEFT JOIN end_quantities AS eq
+            ON eq.product_id = sq.product_id
+           AND eq.location_id = sq.location_id
+        WHERE sq.quantity - COALESCE(eq.quantity, 0) > 0
+        ORDER BY consumption DESC
+        """
+    )
+    return pd.read_sql(
+        query, conn, params={"start_date": start_date, "end_date": end_date}
+    )
+
+
+def get_wholesale_price_changes(conn, start_date, end_date):
+    """
+    Products whose wholesale cost per unit changed between two snapshot dates.
+
+    SQL: Look up each product's recorded wholesale cost on the start date and
+    on the end date, compute the dollar and percent difference, and return
+    only rows where the price changed. Sorted by largest absolute change first.
+
+    Requires product_wholesale_prices (populated during ETL import).
+    """
+    query = text(
+        """
+        WITH start_prices AS (
+            SELECT
+                product_id,
+                wholesale_cost_per_unit
+            FROM product_wholesale_prices
+            WHERE snapshot_date = :start_date
+              AND wholesale_cost_per_unit IS NOT NULL
+        ),
+        end_prices AS (
+            SELECT
+                product_id,
+                wholesale_cost_per_unit
+            FROM product_wholesale_prices
+            WHERE snapshot_date = :end_date
+              AND wholesale_cost_per_unit IS NOT NULL
+        )
+        SELECT
+            p.product_name,
+            sp.wholesale_cost_per_unit AS start_wholesale_cost,
+            ep.wholesale_cost_per_unit AS end_wholesale_cost,
+            ep.wholesale_cost_per_unit - sp.wholesale_cost_per_unit AS absolute_change,
+            ROUND(
+                (
+                    (ep.wholesale_cost_per_unit - sp.wholesale_cost_per_unit)
+                    / sp.wholesale_cost_per_unit
+                ) * 100,
+                2
+            ) AS percent_change
+        FROM start_prices AS sp
+        INNER JOIN end_prices AS ep ON ep.product_id = sp.product_id
+        INNER JOIN products AS p ON p.product_id = sp.product_id
+        WHERE sp.wholesale_cost_per_unit IS DISTINCT FROM ep.wholesale_cost_per_unit
+        ORDER BY ABS(ep.wholesale_cost_per_unit - sp.wholesale_cost_per_unit) DESC
+        """
+    )
+    return pd.read_sql(
+        query, conn, params={"start_date": start_date, "end_date": end_date}
+    )

@@ -261,6 +261,33 @@ def import_file(excel_path):
 
             product_ids_for_snapshots.append(product_id)
 
+            if product_values["wholesale_cost_per_unit"] is not None:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO product_wholesale_prices (
+                            product_id,
+                            snapshot_date,
+                            wholesale_cost_per_unit
+                        )
+                        VALUES (
+                            :product_id,
+                            :snapshot_date,
+                            :wholesale_cost_per_unit
+                        )
+                        ON CONFLICT (product_id, snapshot_date) DO UPDATE
+                            SET wholesale_cost_per_unit = EXCLUDED.wholesale_cost_per_unit
+                        """
+                    ),
+                    {
+                        "product_id": product_id,
+                        "snapshot_date": snapshot_date,
+                        "wholesale_cost_per_unit": product_values[
+                            "wholesale_cost_per_unit"
+                        ],
+                    },
+                )
+
         print(f"Upserted {len(product_ids_for_snapshots)} products")
 
         missing_location_columns = [
